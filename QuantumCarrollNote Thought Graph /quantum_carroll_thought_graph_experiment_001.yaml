@@ -1,0 +1,41 @@
+thought_archive:
+  id: "TA-001"
+  title: "過去の事実という幻想と未来可能性という真実という幻想"
+  source:
+    platform: "note"
+    author: "Sou Hashiguchi"
+
+  nodes:
+    - id: discomfort
+      label: "違和感"
+      type: "concept"
+
+    - id: truth_without_name
+      label: "真理がまだ名前を持っていない状態"
+      type: "quantumcarrollnote"
+
+    - id: future_illusion
+      label: "未来幻想"
+      type: "next_question"
+
+    - id: past_illusion
+      label: "過去幻想"
+      type: "next_question"
+
+  edges:
+    - source: discomfort
+      target: truth_without_name
+      relation: "interpreted_by"
+
+    - source: truth_without_name
+      target: future_illusion
+      relation: "opens"
+
+    - source: truth_without_name
+      target: past_illusion
+      relation: "opens"
+
+  archive_status:
+    phase: "Observation"
+    current_node: "違和感"
+    next_candidate: "反復"
