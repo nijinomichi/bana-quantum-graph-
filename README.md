@@ -200,74 +200,157 @@ python render_v2.py --gen 1
 
 ---
 
+## 🧪 Laboratory Before Product
+
+This repository follows the laboratory-first rule:
+
+> Build the laboratory first.  
+> Build the product second.  
+> Never reverse this order.
+
+### Safety Rules
+
+```yaml
+laboratory_rules:
+  principle:
+    - non_destructive_by_default
+    - append_only
+    - observe_before_commit
+    - provenance_over_speed
+    - sandbox_first
+
+  production:
+    branch: main
+    writable: false
+
+  sandbox:
+    writable: true
+    destroyable: true
+    experimental: true
+
+  archive:
+    immutable: true
+
+  merge:
+    requires:
+      - sandbox_verified
+      - human_review
+      - provenance_recorded
+```
+
+---
+
 ## 🔗 Adapter Layer 接続ガイド
 
-### Architecture: append_only_provenance
+### Architecture: immutable canonical graph + append-only experiment overlays
 
-```
+The canonical graph is not updated by ordinary experiments.
+
+Instead, experiments are stored as append-only overlays. `render_v2.py` may compose the canonical graph and an overlay in memory, then export new artifacts and provenance records. The canonical YAML remains unchanged unless a separate reviewed version revision is explicitly approved.
+
+```text
 Discord
   ↓ (manual trigger or webhook)
 BananaBot (CSV generator)
   ↓
-quantum_trust_graph_experiment_N.yaml (experiment → append)
+experiment_N.csv
   ↓
-Adapter (validation + merge logic)
+experiment_N.yaml (append-only overlay)
   ↓
-quantum_trust_graph.yaml (canonical source updated)
+Adapter (validate + compose in memory)
+  ↓
+quantum_trust_graph.yaml (read-only canonical source)
+  + experiment_N.yaml (overlay)
   ↓
 render_v2.py --gen N (generate PNG + mutation_log)
   ↓
-PNG + JSON (artifacts)
+PNG + JSON (derived artifacts)
   ↓
-Git (provenance audit trail)
+Git branch / Pull Request (provenance audit trail)
   ↓
-Notion (tracking dashboard)
+Notion / IPFS / X (publication adapters)
   ↓
-IPFS + NFT (immutable distribution)
+Community feedback
   ↓
-X / Community (amplification & feedback)
-  ↓
-Next YAML (feedback loop)
+Next overlay
+```
+
+### Canonical Revision Rule
+
+`quantum_trust_graph.yaml` is treated as the canonical graph source. It is not modified by default.
+
+A canonical revision requires:
+
+```yaml
+canonical_revision:
+  required:
+    - human_review
+    - explicit_diff
+    - reason_for_revision
+    - version_update
+    - pull_request
+```
+
+### Adapter Contract
+
+```yaml
+adapter_spec:
+  interface: "yaml_in / artifact_out"
+  contract:
+    input: "previous_step.artifact_path + previous_step.hash"
+    output: "next_step.artifact + sha256(output)"
+  constraint: "MUST NOT modify previous_step.artifact"
+  provenance_field: "adapter_id + input_hash -> output_hash"
 ```
 
 ### 1. Discord BananaBot 統合
 
 ```python
-# Pseudocode: Discord → CSV → experiment YAML
+# Pseudocode: Discord -> CSV -> experiment overlay -> in-memory render
 
 @bot.command()
 async def generate_graph(ctx, experiment_name: str):
-    # ユーザー入力 → CSV
+    # User input -> CSV
     csv_data = await fetch_discord_data(ctx)
-    
-    # CSV → experiment YAML (append-only)
-    exp_yaml = f"quantum_trust_graph_experiment_{timestamp}.yaml"
+
+    # CSV -> experiment overlay YAML (append-only)
+    exp_yaml = f"experiments/experiment_{timestamp}.yaml"
     save_experiment_yaml(csv_data, exp_yaml)
-    
-    # Adapter: validate & merge
-    adapter.merge_to_canonical(exp_yaml, "quantum_trust_graph.yaml")
-    
-    # Render
-    os.system(f"python render_v2.py --gen {gen_number}")
-    
+
+    # Adapter: validate overlay and compose in memory only
+    composed = adapter.compose_in_memory(
+        canonical_path="quantum_trust_graph.yaml",
+        overlay_path=exp_yaml,
+    )
+
+    # Render derived artifact without rewriting canonical YAML
+    png_path, log_path = render_from_composed_graph(composed, gen_number)
+
     # Post result
-    await ctx.send(file=discord.File("quantum_trust_graph_gen{N}.png"))
+    await ctx.send(file=discord.File(png_path))
 ```
 
 ### 2. IPFS × NFT フロー
 
-```
+```text
 mutation_log_gen{N}.json
   ↓ (pinata/web3.storage)
   ↓ IPFS CID: Qm...
-  ↓ (contract.mintNFT(ipfs_cid))
 NFT metadata
-  ↓ (on-chain provenance)
+  ↓ provenance reference only
+```
+
+Important:
+
+```yaml
+ipfs_publication:
+  classification: publication_adapter
+  modifies_canonical_graph: false
 ```
 
 ### 3. Notion ダッシュボード
 
-```
+```text
 mutation_log_gen{N}.json
   ↓ (parse RadicanTrust score)
   ↓ (Notion API)
@@ -278,40 +361,24 @@ Notion Property:
   - Git Commit: a74b1cd0...
 ```
 
-### Adapter 実装例（最小）
+Important:
 
-```python
-# adapters/canonical_merge.py
-def merge_to_canonical(experiment_yaml_path: str, canonical_path: str):
-    """
-    Principle: append_only_provenance
-    - Existing nodes/edges in canonical → preserved
-    - New nodes/edges from experiment → appended
-    - Conflicts → human review required
-    """
-    exp_data = load_yaml(experiment_yaml_path)
-    canonical_data = load_yaml(canonical_path)
-    
-    # Append new nodes
-    for node in exp_data["nodes"]:
-        if not node_exists(canonical_data, node["id"]):
-            canonical_data["nodes"].append(node)
-    
-    # Append new edges
-    for edge in exp_data["edges"]:
-        if not edge_exists(canonical_data, edge):
-            canonical_data["edges"].append(edge)
-    
-    # Save with provenance
-    canonical_data["_provenance"] = {
-        "last_experiment": experiment_yaml_path,
-        "timestamp": datetime.now().isoformat(),
-        "adapter_version": "v1"
-    }
-    
-    save_yaml(canonical_path, canonical_data)
-    return canonical_data
+```yaml
+notion_sync:
+  classification: publication_adapter
+  modifies_canonical_graph: false
 ```
+
+### 4. X Publication
+
+```yaml
+x_publish:
+  classification: publication_adapter
+  deterministic: false
+  modifies_canonical_graph: false
+```
+
+Publication adapters distribute or summarize artifacts. They do not transform the canonical graph.
 
 ---
 
@@ -374,6 +441,8 @@ This repository is part of:
 - `add_adapters_not_rewrites` — Extend via adapters, don't replace
 - `preserve_existing_entrypoints` — Legacy paths remain functional
 - `append_only_provenance` — All changes auditable, immutable history
+- `sandbox_first` — Experiments happen before productization
+- `observe_before_commit` — Read-only audit precedes change
 
 ---
 
@@ -404,5 +473,5 @@ This repository is part of:
 
 > *Impossible is nothing, when we resonate together.* 🕊️🍌
 
-**Last Updated**: 2026-07-03  
+**Last Updated**: 2026-07-06  
 **Maintainer**: Sou Hashiguchi × CoPhelia³ Agents
