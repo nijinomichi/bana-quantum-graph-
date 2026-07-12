@@ -112,6 +112,25 @@ A missing `laboratory_declared_parent_hash` is invalid when `origin: false`.
 
 `laboratory_declared_parent_hash: null` is valid only when `origin: true` is explicitly declared.
 
+## Canonical Hash Format
+
+All artifact identity and lineage hashes in this contract must use canonical SHA-256 form:
+
+```text
+sha256:<64 lowercase hexadecimal characters>
+```
+
+This requirement applies to:
+
+- `laboratory_output_hash`
+- `graph_input_hash`
+- `graph_output_hash`
+- `laboratory_declared_parent_hash` when non-null
+- `graph_parent_hash` when non-null
+- provenance record `content_hash` values
+
+A filename, branch name, CID, shortened digest, uppercase digest, or arbitrary matching token is not a valid substitute for a canonical SHA-256 value.
+
 ## Immutable Provenance References
 
 A repository path or mutable URI is not sufficient by itself.
@@ -164,20 +183,46 @@ matching_rules:
     rule: laboratory.output_hash == graph.input_hash
     meaning: "The graph workflow consumed the exact reviewed Laboratory output."
 
+  canonical_hashes:
+    rule:
+      - is_canonical_sha256(laboratory.output_hash)
+      - is_canonical_sha256(graph.input_hash)
+      - is_canonical_sha256(graph.output_hash)
+      - laboratory.declared_parent_hash == null or is_canonical_sha256(laboratory.declared_parent_hash)
+      - graph.parent_hash == null or is_canonical_sha256(graph.parent_hash)
+    meaning: "Artifact identity and lineage fields use canonical SHA-256 values."
+
   source_parent_present:
     applies_when: laboratory.origin == false
     rule: laboratory.declared_parent_hash != null
     meaning: "A derived Laboratory output declares its parent lineage."
 
+  source_parent_matches_input:
+    applies_when: laboratory.origin == false
+    rule: laboratory.declared_parent_hash in laboratory.input_hashes
+    meaning: "The declared parent is one of the exact inputs recorded for the Laboratory derivation."
+
   source_origin_explicit:
     applies_when: laboratory.origin == true
-    rule: laboratory.declared_parent_hash == null
-    meaning: "An origin artifact explicitly declares that it has no parent."
+    rule:
+      - laboratory.declared_parent_hash == null
+      - laboratory.input_hashes == []
+    meaning: "An origin artifact explicitly declares that it has no parent or derivation input."
 
-  graph_derivation_parent:
+  graph_transformation_parent:
     applies_when: graph.output_hash != graph.input_hash
     rule: graph.parent_hash == graph.input_hash
     meaning: "A graph-derived output declares the consumed graph input as its parent."
+
+  graph_registration_parent:
+    applies_when: graph.output_hash == graph.input_hash and laboratory.origin == false
+    rule: graph.parent_hash == laboratory.declared_parent_hash
+    meaning: "A non-transforming graph registration preserves the derived Laboratory artifact's parent lineage."
+
+  graph_origin_registration:
+    applies_when: graph.output_hash == graph.input_hash and laboratory.origin == true
+    rule: graph.parent_hash == null
+    meaning: "A non-transforming registration of an origin artifact preserves its origin status."
 
   laboratory_reference_integrity:
     rule:
@@ -215,10 +260,13 @@ The workflow must stop when any of the following is true:
 stop_if:
   - experiment_id_mismatch
   - laboratory_output_to_graph_input_hash_mismatch
+  - non_canonical_hash_format
   - derived_parent_hash_missing
+  - declared_parent_not_in_laboratory_inputs
   - origin_flag_missing
   - origin_parent_rule_invalid
   - graph_parent_hash_mismatch
+  - graph_registration_parent_mismatch
   - chain_hash_mismatch
   - provenance_reference_missing
   - provenance_revision_missing
@@ -236,6 +284,7 @@ On mismatch, the system must not:
 - automatically correct identifiers,
 - silently replace an artifact,
 - infer a missing parent hash,
+- accept a non-canonical or arbitrary token as an artifact hash,
 - follow a mutable reference as if it were accepted evidence,
 - continue to publication,
 - update the canonical graph,
@@ -300,6 +349,9 @@ human_review:
   derived_parent_requirement_accepted: true
   origin_rule_accepted: true
   immutable_provenance_references_accepted: true
+  canonical_sha256_format_accepted: true
+  laboratory_parent_lineage_rule_accepted: true
+  graph_registration_parent_rule_accepted: true
   stop_conditions_accepted: true
   mismatch_behavior: stop
   repository_boundary_accepted: true
@@ -314,6 +366,9 @@ Positive:
 - derived Laboratory outputs cannot omit parent lineage,
 - graph transformations may produce a different output hash without invalidating a correct handoff,
 - accepted provenance references cannot silently drift to later content,
+- non-transforming graph registrations preserve parent lineage,
+- declared Laboratory parents are checked against recorded derivation inputs,
+- arbitrary matching strings cannot pass as artifact hashes,
 - hash mismatches stop the workflow before publication,
 - old evidence is preserved,
 - repository responsibilities remain explicit.
@@ -323,7 +378,8 @@ Costs:
 - both provenance references must be maintained,
 - each accepted reference must include an immutable revision and content hash,
 - mutable external records require an immutable snapshot,
-- hashes must be calculated consistently,
+- hashes must be calculated and serialized in canonical SHA-256 form,
+- Laboratory derivations must record the input hashes used to justify parent lineage,
 - derived records must carry parent lineage,
 - origin records must explicitly declare `origin: true`,
 - incomplete records cannot advance automatically,
