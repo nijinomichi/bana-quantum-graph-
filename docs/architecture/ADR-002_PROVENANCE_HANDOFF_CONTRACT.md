@@ -1,6 +1,6 @@
 # ADR-002: Provenance Handoff Contract
 
-Status: proposed
+Status: accepted
 
 Related issue: #4
 
