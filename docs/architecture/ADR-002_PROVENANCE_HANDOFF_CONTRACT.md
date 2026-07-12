@@ -105,12 +105,50 @@ Field meaning:
 - `laboratory_output_hash`: identifies the exact reviewed artifact produced by the Laboratory.
 - `graph_input_hash`: identifies the exact artifact consumed by the graph workflow.
 - `laboratory_declared_parent_hash`: identifies the parent of a derived Laboratory output.
-- `laboratory_provenance_ref`: repository path or URI for the Laboratory record.
-- `graph_provenance_ref`: repository path or URI for the graph artifact provenance record.
+- `laboratory_provenance_ref`: immutable reference to the exact Laboratory provenance record.
+- `graph_provenance_ref`: immutable reference to the exact graph artifact provenance record.
 
 A missing `laboratory_declared_parent_hash` is invalid when `origin: false`.
 
 `laboratory_declared_parent_hash: null` is valid only when `origin: true` is explicitly declared.
+
+## Immutable Provenance References
+
+A repository path or mutable URI is not sufficient by itself.
+
+Each provenance reference must identify both the location and the exact accepted revision of the record.
+
+```yaml
+provenance_reference:
+  repository: owner/repository
+  path: path/to/provenance-record.yaml
+  revision: full_commit_sha
+  content_hash: sha256
+```
+
+Required properties:
+
+- `repository`: identifies the repository that owns the record.
+- `path`: identifies the record within that repository.
+- `revision`: pins the reference to an immutable commit or equivalent revision.
+- `content_hash`: verifies the exact resolved record content.
+
+A branch name such as `main` or `develop`, a path-only reference, or a mutable page URL does not satisfy this contract.
+
+For a provenance record stored in a system without immutable revisions, such as an editable Notion page, the handoff must reference an immutable snapshot that includes:
+
+```yaml
+external_record_snapshot:
+  source_record_id: stable_record_id
+  captured_at: iso8601
+  snapshot_content_hash: sha256
+  immutable_snapshot_ref:
+    repository: owner/repository
+    path: path/to/snapshot
+    revision: full_commit_sha
+```
+
+The mutable source may remain as a working view, but the accepted handoff is anchored to the immutable snapshot.
 
 ## Matching Rules
 
@@ -140,6 +178,18 @@ matching_rules:
     applies_when: graph.output_hash != graph.input_hash
     rule: graph.parent_hash == graph.input_hash
     meaning: "A graph-derived output declares the consumed graph input as its parent."
+
+  laboratory_reference_integrity:
+    rule:
+      - laboratory.provenance_ref.revision != null
+      - laboratory.provenance_ref.content_hash == hash(resolved_laboratory_record)
+    meaning: "The Laboratory reference resolves to the exact accepted record."
+
+  graph_reference_integrity:
+    rule:
+      - graph.provenance_ref.revision != null
+      - graph.provenance_ref.content_hash == hash(resolved_graph_record)
+    meaning: "The graph reference resolves to the exact accepted record."
 
   continuous_chain:
     rule: previous_step.output_hash == next_step.input_hash
@@ -171,6 +221,11 @@ stop_if:
   - graph_parent_hash_mismatch
   - chain_hash_mismatch
   - provenance_reference_missing
+  - provenance_revision_missing
+  - provenance_content_hash_missing
+  - provenance_content_hash_mismatch
+  - mutable_reference_only
+  - unresolved_provenance_revision
   - claim_type_missing
   - prior_evidence_would_be_deleted
   - repository_ownership_is_unclear
@@ -181,6 +236,7 @@ On mismatch, the system must not:
 - automatically correct identifiers,
 - silently replace an artifact,
 - infer a missing parent hash,
+- follow a mutable reference as if it were accepted evidence,
 - continue to publication,
 - update the canonical graph,
 - delete prior evidence.
@@ -231,8 +287,7 @@ This ADR does not authorize:
 - changes to `render.py` or `render_v2.py`,
 - generated artifact changes,
 - external connections,
-- publication,
-- merge.
+- publication.
 
 ## Review Gate
 
@@ -244,6 +299,7 @@ human_review:
   laboratory_output_to_graph_input_rule_accepted: true
   derived_parent_requirement_accepted: true
   origin_rule_accepted: true
+  immutable_provenance_references_accepted: true
   stop_conditions_accepted: true
   mismatch_behavior: stop
   repository_boundary_accepted: true
@@ -257,6 +313,7 @@ Positive:
 - the exact Laboratory artifact consumed by the graph workflow is verified,
 - derived Laboratory outputs cannot omit parent lineage,
 - graph transformations may produce a different output hash without invalidating a correct handoff,
+- accepted provenance references cannot silently drift to later content,
 - hash mismatches stop the workflow before publication,
 - old evidence is preserved,
 - repository responsibilities remain explicit.
@@ -264,6 +321,8 @@ Positive:
 Costs:
 
 - both provenance references must be maintained,
+- each accepted reference must include an immutable revision and content hash,
+- mutable external records require an immutable snapshot,
 - hashes must be calculated consistently,
 - derived records must carry parent lineage,
 - origin records must explicitly declare `origin: true`,
