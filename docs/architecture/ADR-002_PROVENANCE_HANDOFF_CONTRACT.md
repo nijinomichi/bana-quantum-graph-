@@ -24,7 +24,8 @@ Use the following relationship:
 
 ```text
 Laboratory Case
-    ↓ experiment_id + output_hash
+    ↓ experiment_id
+    ↓ laboratory.output_hash == graph.input_hash
 Graph Artifact Provenance
 ```
 
@@ -69,21 +70,47 @@ Neither side replaces the other.
 
 ## Required Handoff Fields
 
+Fields required for every handoff:
+
 ```yaml
 handoff_rule:
   required_link:
     - experiment_id
-    - output_hash
+    - laboratory_output_hash
+    - graph_input_hash
     - laboratory_provenance_ref
     - graph_provenance_ref
+```
+
+Fields required when the Laboratory output is a derived artifact:
+
+```yaml
+derived_handoff:
+  required:
+    - laboratory_declared_parent_hash
+  origin: false
+```
+
+Fields required when the Laboratory output is an origin artifact:
+
+```yaml
+origin_handoff:
+  laboratory_declared_parent_hash: null
+  origin: true
 ```
 
 Field meaning:
 
 - `experiment_id`: identifies the same experiment on both sides.
-- `output_hash`: identifies the exact artifact handed from the Laboratory to the graph workflow.
+- `laboratory_output_hash`: identifies the exact reviewed artifact produced by the Laboratory.
+- `graph_input_hash`: identifies the exact artifact consumed by the graph workflow.
+- `laboratory_declared_parent_hash`: identifies the parent of a derived Laboratory output.
 - `laboratory_provenance_ref`: repository path or URI for the Laboratory record.
 - `graph_provenance_ref`: repository path or URI for the graph artifact provenance record.
+
+A missing `laboratory_declared_parent_hash` is invalid when `origin: false`.
+
+`laboratory_declared_parent_hash: null` is valid only when `origin: true` is explicitly declared.
 
 ## Matching Rules
 
@@ -95,28 +122,40 @@ matching_rules:
     rule: laboratory.experiment_id == graph.experiment_id
     meaning: "Both records describe the same experiment."
 
-  same_artifact:
-    rule: laboratory.output_hash == graph.output_hash
-    meaning: "Both records identify the same output artifact."
+  consumed_artifact:
+    rule: laboratory.output_hash == graph.input_hash
+    meaning: "The graph workflow consumed the exact reviewed Laboratory output."
 
-  correct_parent:
-    rule: graph.parent_hash == laboratory.declared_parent_hash
-    meaning: "The graph artifact derives from the parent declared by the Laboratory."
+  source_parent_present:
+    applies_when: laboratory.origin == false
+    rule: laboratory.declared_parent_hash != null
+    meaning: "A derived Laboratory output declares its parent lineage."
+
+  source_origin_explicit:
+    applies_when: laboratory.origin == true
+    rule: laboratory.declared_parent_hash == null
+    meaning: "An origin artifact explicitly declares that it has no parent."
+
+  graph_derivation_parent:
+    applies_when: graph.output_hash != graph.input_hash
+    rule: graph.parent_hash == graph.input_hash
+    meaning: "A graph-derived output declares the consumed graph input as its parent."
 
   continuous_chain:
     rule: previous_step.output_hash == next_step.input_hash
     meaning: "The output of one stage is the unchanged input of the next stage."
 ```
 
-For an origin artifact with no parent:
+The Laboratory output and graph output are not required to match when the graph workflow performs a transformation.
+
+For a non-transforming registration record, the following may also hold:
 
 ```yaml
-origin_artifact:
-  parent_hash: null
-  origin: true
+non_transforming_registration:
+  rule: graph.input_hash == graph.output_hash
 ```
 
-`parent_hash: null` is valid only when `origin: true` is explicitly declared.
+This equality must not be assumed for transformation adapters.
 
 ## Stop Conditions
 
@@ -125,8 +164,11 @@ The workflow must stop when any of the following is true:
 ```yaml
 stop_if:
   - experiment_id_mismatch
-  - output_hash_mismatch
-  - parent_hash_mismatch
+  - laboratory_output_to_graph_input_hash_mismatch
+  - derived_parent_hash_missing
+  - origin_flag_missing
+  - origin_parent_rule_invalid
+  - graph_parent_hash_mismatch
   - chain_hash_mismatch
   - provenance_reference_missing
   - claim_type_missing
@@ -138,6 +180,7 @@ On mismatch, the system must not:
 
 - automatically correct identifiers,
 - silently replace an artifact,
+- infer a missing parent hash,
 - continue to publication,
 - update the canonical graph,
 - delete prior evidence.
@@ -197,8 +240,11 @@ Before this ADR may be accepted, human review must confirm:
 
 ```yaml
 human_review:
-  handoff_fields_understood: true
-  matching_rules_accepted: true
+  ownership_boundaries_understood: true
+  laboratory_output_to_graph_input_rule_accepted: true
+  derived_parent_requirement_accepted: true
+  origin_rule_accepted: true
+  stop_conditions_accepted: true
   mismatch_behavior: stop
   repository_boundary_accepted: true
 ```
@@ -208,7 +254,9 @@ human_review:
 Positive:
 
 - experiment context and artifact identity remain clearly separated,
-- every derived artifact can be traced to its experiment,
+- the exact Laboratory artifact consumed by the graph workflow is verified,
+- derived Laboratory outputs cannot omit parent lineage,
+- graph transformations may produce a different output hash without invalidating a correct handoff,
 - hash mismatches stop the workflow before publication,
 - old evidence is preserved,
 - repository responsibilities remain explicit.
@@ -217,6 +265,8 @@ Costs:
 
 - both provenance references must be maintained,
 - hashes must be calculated consistently,
+- derived records must carry parent lineage,
+- origin records must explicitly declare `origin: true`,
 - incomplete records cannot advance automatically,
 - human review is required when a mismatch occurs.
 
